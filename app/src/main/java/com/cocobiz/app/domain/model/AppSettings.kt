@@ -8,7 +8,8 @@ data class AppSettings(
     val senderEmail: String = "",
     val darkMode: DarkModeOption = DarkModeOption.SYSTEM,
     val backupEnabled: Boolean = false,
-    val defaultCycleDays: Int = 60
+    val defaultCycleDays: Int = 60,
+    val editCompletedEnabled: Boolean = false
 )
 
 enum class DarkModeOption(val displayName: String) {

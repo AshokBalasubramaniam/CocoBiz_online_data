@@ -1,10 +1,15 @@
-# Android build outputs
+# ---------- Android / Gradle ----------
+# Build outputs
 *.apk
 *.aab
 *.ap_
 *.dex
-/build/
+build/
 app/build/
+app/release/
+captures/
+.externalNativeBuild/
+.cxx/
 
 # Local configuration (contains SDK path — machine-specific)
 local.properties
@@ -14,23 +19,37 @@ local.properties
 *.keystore
 keystore.properties
 
-# Gradle caches and wrapper (keep wrapper scripts, ignore jars)
+# Gradle caches (the wrapper jar is kept so ./gradlew works after cloning)
 .gradle/
-gradle/wrapper/gradle-wrapper.jar
-!gradle/wrapper/gradle-wrapper.properties
 
-# IDE — IntelliJ / Android Studio
+# Kotlin compiler daemon state
+.kotlin/
+*.class
+
+# IDE — IntelliJ / Android Studio / VS Code
 .idea/
 *.iml
 *.ipr
 *.iws
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Kotlin
-*.class
+.vscode/
 
 # ProGuard mapping (generated per release)
 app/proguard-mapping.txt
+
+# Logs
+*.log
+
+# ---------- Rust backend ----------
+backend/target/
+**/*.rs.bk
+*.pdb
+
+# Secrets — never commit real env files (backend/.env.example is kept)
+.env
+.env.*
+!.env.example
+
+# ---------- OS / tools ----------
+.DS_Store
+Thumbs.db
+.claude/settings.local.json

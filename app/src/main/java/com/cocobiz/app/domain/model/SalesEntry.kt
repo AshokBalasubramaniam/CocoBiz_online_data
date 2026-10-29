@@ -12,6 +12,7 @@ data class SalesEntry(
     val nextSalesDate: LocalDate,
     val quantity: Double,
     val rate: Double,
+    val marketRate: Double = 0.0,
     val totalAmount: Double,
     val coconutType: CoconutType,
     val cycleDays: Int = 60,

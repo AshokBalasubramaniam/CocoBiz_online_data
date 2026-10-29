@@ -10,4 +10,5 @@ interface SettingsRepository {
     suspend fun updateNotificationEnabled(enabled: Boolean)
     suspend fun updateEmailEnabled(enabled: Boolean)
     suspend fun updateDarkMode(mode: String)
+    suspend fun updateEditCompletedEnabled(enabled: Boolean)
 }

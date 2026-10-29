@@ -1,5 +1,6 @@
 -keep class com.cocobiz.app.data.local.entity.** { *; }
 -keep class com.cocobiz.app.domain.model.** { *; }
+-keep class com.cocobiz.app.data.remote.** { *; }
 -keepattributes *Annotation*
 -keepclassmembers class * {
     @androidx.room.* <methods>;

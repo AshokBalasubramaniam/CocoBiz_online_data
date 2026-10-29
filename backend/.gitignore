@@ -1,16 +1,2 @@
-# Dependencies
-node_modules/
-
-# Environment variables (contains DB credentials — never commit)
+/target
 .env
-.env.local
-.env.production
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-
-# OS
-.DS_Store
-Thumbs.db

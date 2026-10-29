@@ -1,5 +1,6 @@
 package com.cocobiz.app.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -26,6 +27,7 @@ data class SalesEntryEntity(
     val nextSalesDate: Long,
     val quantity: Double,
     val rate: Double,
+    @ColumnInfo(defaultValue = "0") val marketRate: Double = 0.0,
     val totalAmount: Double,
     val coconutType: String,
     val cycleDays: Int = 60,

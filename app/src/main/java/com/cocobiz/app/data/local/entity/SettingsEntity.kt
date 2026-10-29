@@ -1,5 +1,6 @@
 package com.cocobiz.app.data.local.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -12,5 +13,6 @@ data class SettingsEntity(
     val senderEmail: String = "",
     val darkMode: String = "SYSTEM",
     val backupEnabled: Boolean = false,
-    val defaultCycleDays: Int = 60
+    val defaultCycleDays: Int = 60,
+    @ColumnInfo(defaultValue = "0") val editCompletedEnabled: Boolean = false
 )

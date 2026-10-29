@@ -8,6 +8,7 @@ interface SalesRepository {
     fun getActiveSales(): Flow<List<SalesEntry>>
     fun getCompletedSales(): Flow<List<SalesEntry>>
     fun getSaleById(id: Long): Flow<SalesEntry?>
+    suspend fun getPreviousMarketRateSale(sale: SalesEntry): SalesEntry?
     fun getSalesByDealer(dealerId: Long): Flow<List<SalesEntry>>
     fun searchSales(query: String): Flow<List<SalesEntry>>
     fun getTotalActiveRevenue(): Flow<Double>

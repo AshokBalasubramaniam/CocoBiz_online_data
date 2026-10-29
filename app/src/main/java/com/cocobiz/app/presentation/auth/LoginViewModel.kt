@@ -3,8 +3,7 @@ package com.cocobiz.app.presentation.auth
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cocobiz.app.data.local.AuthPreferences
-import com.cocobiz.app.data.remote.api.AuthApiService
-import com.cocobiz.app.data.remote.dto.LoginRequest
+import com.cocobiz.app.domain.repository.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import retrofit2.HttpException
+import java.io.IOException
 import javax.inject.Inject
 
 data class LoginUiState(
@@ -24,7 +24,7 @@ data class LoginUiState(
 
 @HiltViewModel
 class LoginViewModel @Inject constructor(
-    private val authApi: AuthApiService,
+    private val authRepository: AuthRepository,
     private val authPrefs: AuthPreferences
 ) : ViewModel() {
 
@@ -43,8 +43,8 @@ class LoginViewModel @Inject constructor(
         viewModelScope.launch {
             _state.update { it.copy(isLoading = true, error = null) }
             try {
-                val resp = authApi.login(LoginRequest(s.username.trim().lowercase(), s.password))
-                authPrefs.saveAuth(resp.token, resp.user)
+                val user = authRepository.login(s.username.trim().lowercase(), s.password)
+                authPrefs.saveAuth(user)
                 onSuccess()
             } catch (e: Exception) {
                 _state.update { it.copy(isLoading = false, error = e.toUserMessage()) }
@@ -53,14 +53,15 @@ class LoginViewModel @Inject constructor(
     }
 }
 
-internal fun Throwable.toUserMessage(): String {
-    if (this is HttpException) {
-        val body = response()?.errorBody()?.string()
-        if (!body.isNullOrBlank()) {
-            return try { JSONObject(body).optString("error", "Server error (${code()})") }
-            catch (_: Exception) { "Server error (${code()})" }
-        }
-        return "Server error (${code()})"
+internal fun Throwable.toUserMessage(): String = when (this) {
+    is HttpException -> {
+        // Backend errors look like {"error": "invalid username or password"}
+        val serverMessage = runCatching {
+            JSONObject(response()?.errorBody()?.string().orEmpty()).optString("error")
+        }.getOrNull()
+        serverMessage?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
+            ?: "Server error (${code()}). Please try again."
     }
-    return message ?: "Unknown error"
+    is IOException -> "Cannot reach the CocoBiz server. Check your internet connection and try again."
+    else -> message ?: "Something went wrong"
 }

@@ -23,6 +23,22 @@ interface SalesEntryDao {
     @Query("SELECT * FROM sales_entries WHERE id = :id")
     fun getSaleById(id: Long): Flow<SalesEntryEntity?>
 
+    @Query("""
+        SELECT * FROM sales_entries
+        WHERE id != :excludeId
+        AND coconutType = :coconutType
+        AND marketRate > 0
+        AND (salesDate < :salesDate OR (salesDate = :salesDate AND createdAt < :createdAt))
+        ORDER BY salesDate DESC, createdAt DESC
+        LIMIT 1
+    """)
+    suspend fun getPreviousMarketRateSale(
+        excludeId: Long,
+        coconutType: String,
+        salesDate: Long,
+        createdAt: Long
+    ): SalesEntryEntity?
+
     @Query("SELECT * FROM sales_entries WHERE dealerId = :dealerId ORDER BY createdAt DESC")
     fun getSalesByDealer(dealerId: Long): Flow<List<SalesEntryEntity>>
 

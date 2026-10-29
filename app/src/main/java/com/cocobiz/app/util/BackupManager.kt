@@ -6,10 +6,13 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import com.cocobiz.app.data.remote.api.CocoBizApiService
-import com.cocobiz.app.data.remote.dto.DealerDto
-import com.cocobiz.app.data.remote.dto.SalesEntryDto
-import com.cocobiz.app.data.remote.dto.UserProfileDto
+import com.cocobiz.app.data.local.dao.DealerDao
+import com.cocobiz.app.data.local.dao.SalesEntryDao
+import com.cocobiz.app.data.local.dao.UserProfileDao
+import com.cocobiz.app.data.local.entity.DealerEntity
+import com.cocobiz.app.data.local.entity.SalesEntryEntity
+import com.cocobiz.app.data.local.entity.UserProfileEntity
+import com.cocobiz.app.data.sync.CloudSyncManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,7 +39,10 @@ sealed class BackupResult {
 @Singleton
 class BackupManager @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val api: CocoBizApiService
+    private val dealerDao: DealerDao,
+    private val salesEntryDao: SalesEntryDao,
+    private val userProfileDao: UserProfileDao,
+    private val cloudSync: CloudSyncManager
 ) {
     companion object {
         const val BACKUP_FOLDER = "CocoBiz"
@@ -54,9 +60,9 @@ class BackupManager @Inject constructor(
 
     suspend fun backup(): BackupResult = withContext(Dispatchers.IO) {
         try {
-            val dealers = api.getAllDealers()
-            val sales = api.getAllSales()
-            val profile = runCatching { api.getProfile() }.getOrNull()
+            val dealers = dealerDao.getAllSync()
+            val sales = salesEntryDao.getAllSync()
+            val profile = userProfileDao.getProfileSync()
 
             val plaintext = buildJson(dealers, sales, profile).toByteArray(Charsets.UTF_8)
             val encrypted = encrypt(plaintext)
@@ -89,10 +95,10 @@ class BackupManager @Inject constructor(
 
             root.optJSONArray("dealers")?.let { arr ->
                 dealerCount = arr.length()
-                val dtos = (0 until arr.length()).map { i ->
+                val entities = (0 until arr.length()).map { i ->
                     val o = arr.getJSONObject(i)
-                    DealerDto(
-                        localId = o.getLong("id"),
+                    DealerEntity(
+                        id = o.getLong("id"),
                         dealerName = o.getString("dealerName"),
                         place = o.getString("place"),
                         phone = o.getString("phone"),
@@ -105,15 +111,15 @@ class BackupManager @Inject constructor(
                         updatedAt = o.getLong("updatedAt")
                     )
                 }
-                dtos.forEach { runCatching { api.upsertDealer(it) } }
+                dealerDao.insertAll(entities)
             }
 
             root.optJSONArray("sales")?.let { arr ->
                 salesCount = arr.length()
-                val dtos = (0 until arr.length()).map { i ->
+                val entities = (0 until arr.length()).map { i ->
                     val o = arr.getJSONObject(i)
-                    SalesEntryDto(
-                        localId = o.getLong("id"),
+                    SalesEntryEntity(
+                        id = o.getLong("id"),
                         dealerId = o.getLong("dealerId"),
                         dealerName = o.getString("dealerName"),
                         dealerPlace = o.getString("dealerPlace"),
@@ -121,6 +127,7 @@ class BackupManager @Inject constructor(
                         nextSalesDate = o.getLong("nextSalesDate"),
                         quantity = o.getDouble("quantity"),
                         rate = o.getDouble("rate"),
+                        marketRate = o.optDouble("marketRate", 0.0),
                         totalAmount = o.getDouble("totalAmount"),
                         coconutType = o.getString("coconutType"),
                         cycleDays = o.optInt("cycleDays", 60),
@@ -130,14 +137,14 @@ class BackupManager @Inject constructor(
                         updatedAt = o.getLong("updatedAt")
                     )
                 }
-                if (dtos.isNotEmpty()) {
-                    runCatching { api.bulkUpsertSales(mapOf("sales" to dtos)) }
+                if (entities.isNotEmpty()) {
+                    salesEntryDao.insertAll(entities)
                 }
             }
 
             root.optJSONObject("profile")?.let { o ->
-                val profileDto = UserProfileDto(
-                    localId = o.getLong("id"),
+                val profileEntity = UserProfileEntity(
+                    id = o.getLong("id"),
                     businessName = o.optString("businessName", ""),
                     ownerName = o.optString("ownerName", ""),
                     phone = o.optString("phone", ""),
@@ -152,10 +159,11 @@ class BackupManager @Inject constructor(
                     createdAt = o.getLong("createdAt"),
                     updatedAt = o.getLong("updatedAt")
                 )
-                runCatching { api.saveProfile(profileDto) }
+                userProfileDao.insertOrUpdate(profileEntity)
             }
+            cloudSync.onLocalChange()
 
-            BackupResult.Success("Restore complete!\n$dealerCount dealers, $salesCount sales synced to cloud.")
+            BackupResult.Success("Restore complete!\n$dealerCount dealers, $salesCount sales restored.")
         } catch (e: Exception) {
             BackupResult.Error("Restore failed: ${e.message}")
         }
@@ -163,10 +171,9 @@ class BackupManager @Inject constructor(
 
     suspend fun resetAllData(): BackupResult = withContext(Dispatchers.IO) {
         try {
-            val sales = runCatching { api.getAllSales() }.getOrElse { emptyList() }
-            sales.forEach { runCatching { api.deleteSale(it.localId) } }
-            val dealers = runCatching { api.getAllDealers() }.getOrElse { emptyList() }
-            dealers.forEach { runCatching { api.deleteDealer(it.localId) } }
+            salesEntryDao.deleteAll()
+            dealerDao.deleteAll()
+            cloudSync.onLocalChange()
             BackupResult.Success("All data deleted successfully")
         } catch (e: Exception) {
             BackupResult.Error(e.message ?: "Reset failed")
@@ -174,9 +181,9 @@ class BackupManager @Inject constructor(
     }
 
     private fun buildJson(
-        dealers: List<DealerDto>,
-        sales: List<SalesEntryDto>,
-        profile: UserProfileDto?
+        dealers: List<DealerEntity>,
+        sales: List<SalesEntryEntity>,
+        profile: UserProfileEntity?
     ): String {
         val root = JSONObject()
         root.put("version", FORMAT_VERSION)
@@ -186,7 +193,7 @@ class BackupManager @Inject constructor(
         val dealersArr = JSONArray()
         dealers.forEach { d ->
             dealersArr.put(JSONObject().apply {
-                put("id", d.localId)
+                put("id", d.id)
                 put("dealerName", d.dealerName)
                 put("place", d.place)
                 put("phone", d.phone)
@@ -204,7 +211,7 @@ class BackupManager @Inject constructor(
         val salesArr = JSONArray()
         sales.forEach { s ->
             salesArr.put(JSONObject().apply {
-                put("id", s.localId)
+                put("id", s.id)
                 put("dealerId", s.dealerId)
                 put("dealerName", s.dealerName)
                 put("dealerPlace", s.dealerPlace)
@@ -212,6 +219,7 @@ class BackupManager @Inject constructor(
                 put("nextSalesDate", s.nextSalesDate)
                 put("quantity", s.quantity)
                 put("rate", s.rate)
+                put("marketRate", s.marketRate)
                 put("totalAmount", s.totalAmount)
                 put("coconutType", s.coconutType)
                 put("cycleDays", s.cycleDays)
@@ -225,7 +233,7 @@ class BackupManager @Inject constructor(
 
         if (profile != null) {
             root.put("profile", JSONObject().apply {
-                put("id", profile.localId)
+                put("id", profile.id)
                 put("businessName", profile.businessName)
                 put("ownerName", profile.ownerName)
                 put("phone", profile.phone)

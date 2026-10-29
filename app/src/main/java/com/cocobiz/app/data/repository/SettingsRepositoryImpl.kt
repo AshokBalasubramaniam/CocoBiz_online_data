@@ -1,86 +1,75 @@
 package com.cocobiz.app.data.repository
 
-import com.cocobiz.app.data.remote.api.CocoBizApiService
-import com.cocobiz.app.data.remote.dto.SettingsDto
+import com.cocobiz.app.data.local.dao.SettingsDao
+import com.cocobiz.app.data.local.entity.SettingsEntity
+import com.cocobiz.app.data.sync.CloudSyncManager
 import com.cocobiz.app.domain.model.AppSettings
 import com.cocobiz.app.domain.model.DarkModeOption
 import com.cocobiz.app.domain.repository.SettingsRepository
-import com.cocobiz.app.util.NetworkConnectivityObserver
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class SettingsRepositoryImpl @Inject constructor(
-    private val api: CocoBizApiService,
-    private val network: NetworkConnectivityObserver
+    private val dao: SettingsDao,
+    private val cloudSync: CloudSyncManager
 ) : SettingsRepository {
 
-    private val _settings = MutableStateFlow(AppSettings())
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    init {
-        scope.launch {
-            network.onConnected.collect { refresh() }
-        }
-    }
-
-    private suspend fun refresh() {
-        runCatching { _settings.value = api.getSettings().toDomain() }
-    }
-
-    override fun getSettings(): Flow<AppSettings> = _settings.asStateFlow()
+    override fun getSettings(): Flow<AppSettings> =
+        dao.getSettings().map { it?.toDomain() ?: AppSettings() }
 
     override suspend fun saveSettings(settings: AppSettings) {
-        runCatching { api.saveSettings(settings.toDto()) }
-        _settings.value = settings
+        save(settings.toEntity())
     }
 
     override suspend fun updateReminderDays(days: Int) {
-        val updated = _settings.value.copy(reminderDays = days)
-        runCatching { api.saveSettings(updated.toDto()) }
-        _settings.value = updated
+        save(currentOrDefault().copy(reminderDays = days).toEntity())
     }
 
     override suspend fun updateNotificationEnabled(enabled: Boolean) {
-        val updated = _settings.value.copy(notificationEnabled = enabled)
-        runCatching { api.saveSettings(updated.toDto()) }
-        _settings.value = updated
+        save(currentOrDefault().copy(notificationEnabled = enabled).toEntity())
     }
 
     override suspend fun updateEmailEnabled(enabled: Boolean) {
-        val updated = _settings.value.copy(emailEnabled = enabled)
-        runCatching { api.saveSettings(updated.toDto()) }
-        _settings.value = updated
+        save(currentOrDefault().copy(emailEnabled = enabled).toEntity())
     }
 
     override suspend fun updateDarkMode(mode: String) {
-        val updated = _settings.value.copy(
-            darkMode = DarkModeOption.entries.firstOrNull { it.name == mode } ?: DarkModeOption.SYSTEM
+        save(
+            currentOrDefault().copy(
+                darkMode = DarkModeOption.entries.firstOrNull { it.name == mode } ?: DarkModeOption.SYSTEM
+            ).toEntity()
         )
-        runCatching { api.saveSettings(updated.toDto()) }
-        _settings.value = updated
     }
 
-    private fun SettingsDto.toDomain(): AppSettings = AppSettings(
-        id = localId, reminderDays = reminderDays,
+    override suspend fun updateEditCompletedEnabled(enabled: Boolean) {
+        save(currentOrDefault().copy(editCompletedEnabled = enabled).toEntity())
+    }
+
+    private suspend fun save(entity: SettingsEntity) {
+        dao.insertOrUpdate(entity)
+        cloudSync.onLocalChange()
+    }
+
+    private suspend fun currentOrDefault(): AppSettings =
+        dao.getSettingsSync()?.toDomain() ?: AppSettings()
+
+    private fun SettingsEntity.toDomain(): AppSettings = AppSettings(
+        id = id, reminderDays = reminderDays,
         notificationEnabled = notificationEnabled, emailEnabled = emailEnabled,
         senderEmail = senderEmail,
         darkMode = DarkModeOption.entries.firstOrNull { it.name == darkMode } ?: DarkModeOption.SYSTEM,
-        backupEnabled = backupEnabled, defaultCycleDays = defaultCycleDays
+        backupEnabled = backupEnabled, defaultCycleDays = defaultCycleDays,
+        editCompletedEnabled = editCompletedEnabled
     )
 
-    private fun AppSettings.toDto(): SettingsDto = SettingsDto(
-        localId = id, reminderDays = reminderDays,
+    private fun AppSettings.toEntity(): SettingsEntity = SettingsEntity(
+        id = id, reminderDays = reminderDays,
         notificationEnabled = notificationEnabled, emailEnabled = emailEnabled,
         senderEmail = senderEmail, darkMode = darkMode.name,
         backupEnabled = backupEnabled, defaultCycleDays = defaultCycleDays,
-        updatedAt = System.currentTimeMillis()
+        editCompletedEnabled = editCompletedEnabled
     )
 }

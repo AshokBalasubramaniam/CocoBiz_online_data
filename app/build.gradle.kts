@@ -17,8 +17,9 @@ android {
         versionCode = 1
         versionName = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "SERVER_URL", "\"https://cocobiz.onrender.com\"")
 
+        // CocoBiz backend (backend/ folder, deployed via render.yaml). All account data lives here.
+        buildConfigField("String", "SERVER_URL", "\"https://cocobiz.onrender.com\"")
     }
 
     buildTypes {
@@ -105,10 +106,10 @@ dependencies {
     // Biometric (device PIN/pattern/password + fingerprint auth)
     implementation(libs.biometric)
 
-    // Encrypted secure storage for JWT token
+    // Encrypted secure storage for auth state
     implementation(libs.security.crypto)
 
-    // Retrofit + OkHttp (MongoDB backend sync)
+    // Retrofit + OkHttp (cloud storage backend)
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.gson)
     implementation(libs.okhttp.logging)

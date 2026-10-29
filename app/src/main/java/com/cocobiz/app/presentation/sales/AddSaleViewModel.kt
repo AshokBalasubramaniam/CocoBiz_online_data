@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cocobiz.app.domain.model.CoconutType
 import com.cocobiz.app.domain.model.Dealer
+import com.cocobiz.app.domain.model.SaleStatus
 import com.cocobiz.app.domain.model.SalesEntry
 import com.cocobiz.app.domain.repository.DealerRepository
 import com.cocobiz.app.domain.repository.SalesRepository
@@ -17,8 +18,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 
 data class SaleFormState(
@@ -32,6 +35,7 @@ data class SaleFormState(
     val coconutType: CoconutType = CoconutType.TONNAGE,
     val quantity: String = "",
     val rate: String = "",
+    val marketRate: String = "",
     val totalAmount: Double = 0.0,
     val cycleDays: Int = 60,
     val notes: String = "",
@@ -43,6 +47,10 @@ data class SaleFormState(
     val isSaved: Boolean = false,
     val isLoading: Boolean = false,
     val isEditMode: Boolean = false,
+    val status: SaleStatus = SaleStatus.ACTIVE,
+    val createdAt: Long = 0L,
+    /** Completed more than 30 days ago: sale date and cycle can't be changed. */
+    val datesLocked: Boolean = false,
     val showDatePicker: Boolean = false
 ) {
     val isValid: Boolean
@@ -69,11 +77,18 @@ class AddSaleViewModel @Inject constructor(
         viewModelScope.launch {
             val settings = settingsRepository.getSettings().first()
             val dealers = dealerRepository.getAllDealers().first()
-            _formState.value = _formState.value.copy(
-                cycleDays = settings.defaultCycleDays,
-                nextSalesDate = LocalDate.now().plusDays(settings.defaultCycleDays.toLong()),
-                dealers = dealers
-            )
+            // When editing, the sale may load first; never overwrite its dates/cycle.
+            _formState.update { state ->
+                if (state.isEditMode) {
+                    state.copy(dealers = dealers)
+                } else {
+                    state.copy(
+                        cycleDays = settings.defaultCycleDays,
+                        nextSalesDate = LocalDate.now().plusDays(settings.defaultCycleDays.toLong()),
+                        dealers = dealers
+                    )
+                }
+            }
         }
     }
 
@@ -92,9 +107,14 @@ class AddSaleViewModel @Inject constructor(
                     coconutType = it.coconutType,
                     quantity = it.quantity.toFormattedString(),
                     rate = it.rate.toString(),
+                    marketRate = if (it.marketRate > 0) it.marketRate.toFormattedString() else "",
                     totalAmount = it.totalAmount,
                     cycleDays = it.cycleDays,
                     notes = it.notes,
+                    status = it.status,
+                    createdAt = it.createdAt,
+                    datesLocked = it.status == SaleStatus.COMPLETED &&
+                        ChronoUnit.DAYS.between(it.salesDate, LocalDate.now()) > DATE_LOCK_DAYS,
                     isEditMode = true,
                     isLoading = false
                 )
@@ -141,7 +161,12 @@ class AddSaleViewModel @Inject constructor(
         recalculate()
     }
 
+    fun updateMarketRate(value: String) {
+        _formState.value = _formState.value.copy(marketRate = value)
+    }
+
     fun updateSalesDate(date: LocalDate) {
+        if (_formState.value.datesLocked) return
         val nextDate = calculateNextSalesDate(date, _formState.value.cycleDays)
         _formState.value = _formState.value.copy(
             salesDate = date,
@@ -151,6 +176,7 @@ class AddSaleViewModel @Inject constructor(
     }
 
     fun updateCycleDays(days: Int) {
+        if (_formState.value.datesLocked) return
         val nextDate = calculateNextSalesDate(_formState.value.salesDate, days)
         _formState.value = _formState.value.copy(
             cycleDays = days,
@@ -163,6 +189,7 @@ class AddSaleViewModel @Inject constructor(
     }
 
     fun toggleDatePicker(show: Boolean) {
+        if (show && _formState.value.datesLocked) return
         _formState.value = _formState.value.copy(showDatePicker = show)
     }
 
@@ -194,20 +221,31 @@ class AddSaleViewModel @Inject constructor(
 
         viewModelScope.launch {
             _formState.value = _formState.value.copy(isSaving = true)
+            val dealerId = try {
+                resolveDealerId(state)
+            } catch (e: Exception) {
+                _formState.value = _formState.value.copy(
+                    isSaving = false,
+                    dealerNameError = "Could not save dealer"
+                )
+                return@launch
+            }
             val sale = SalesEntry(
                 id = state.id,
-                dealerId = state.selectedDealerId,
+                dealerId = dealerId,
                 dealerName = state.dealerName.trim(),
                 dealerPlace = state.dealerPlace.trim(),
                 salesDate = state.salesDate,
                 nextSalesDate = state.nextSalesDate,
                 quantity = qty!!,
                 rate = rate!!,
+                marketRate = state.marketRate.toDoubleOrNull() ?: 0.0,
                 totalAmount = qty * rate,
                 coconutType = state.coconutType,
                 cycleDays = state.cycleDays,
+                status = state.status,
                 notes = state.notes.trim()
-            )
+            ).let { if (state.createdAt > 0) it.copy(createdAt = state.createdAt) else it }
             if (state.isEditMode) {
                 salesRepository.updateSale(sale)
             } else {
@@ -215,6 +253,34 @@ class AddSaleViewModel @Inject constructor(
             }
             _formState.value = _formState.value.copy(isSaving = false, isSaved = true)
         }
+    }
+
+    /**
+     * Sales must reference a real dealer row. If the typed name isn't a selected
+     * dealer (or that dealer no longer exists), reuse a dealer with the same name
+     * or create a new one.
+     */
+    private suspend fun resolveDealerId(state: SaleFormState): Long {
+        if (state.selectedDealerId != 0L &&
+            dealerRepository.getDealerById(state.selectedDealerId).first() != null
+        ) return state.selectedDealerId
+
+        val name = state.dealerName.trim()
+        dealerRepository.getAllDealers().first()
+            .firstOrNull { it.dealerName.trim().equals(name, ignoreCase = true) }
+            ?.let { return it.id }
+
+        return dealerRepository.addDealer(
+            Dealer(
+                dealerName = name,
+                place = state.dealerPlace.trim(),
+                phone = state.dealerPhone.trim()
+            )
+        )
+    }
+
+    private companion object {
+        const val DATE_LOCK_DAYS = 30L
     }
 
     private fun Double.toFormattedString(): String =

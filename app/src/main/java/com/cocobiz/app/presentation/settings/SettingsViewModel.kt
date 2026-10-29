@@ -3,11 +3,13 @@ package com.cocobiz.app.presentation.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.cocobiz.app.data.local.AuthPreferences
-import com.cocobiz.app.data.remote.api.AuthApiService
-import com.cocobiz.app.data.remote.dto.UpdateReminderRequest
+import com.cocobiz.app.data.sync.CloudSyncManager
 import com.cocobiz.app.domain.model.AppSettings
 import com.cocobiz.app.domain.model.DarkModeOption
+import com.cocobiz.app.domain.model.UserProfile
+import com.cocobiz.app.domain.repository.AuthRepository
 import com.cocobiz.app.domain.repository.SettingsRepository
+import com.cocobiz.app.domain.repository.UserProfileRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -27,8 +29,10 @@ data class ReminderState(
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
-    private val authApi: AuthApiService,
-    private val authPrefs: AuthPreferences
+    private val authRepository: AuthRepository,
+    private val authPrefs: AuthPreferences,
+    private val userProfileRepository: UserProfileRepository,
+    private val cloudSync: CloudSyncManager
 ) : ViewModel() {
 
     val settings: StateFlow<AppSettings> = settingsRepository.getSettings()
@@ -36,6 +40,13 @@ class SettingsViewModel @Inject constructor(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = AppSettings()
+        )
+
+    val profile: StateFlow<UserProfile?> = userProfileRepository.getProfile()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = null
         )
 
     private val _reminder = MutableStateFlow(
@@ -62,6 +73,10 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch { settingsRepository.updateDarkMode(mode.name) }
     }
 
+    fun updateEditCompletedEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsRepository.updateEditCompletedEnabled(enabled) }
+    }
+
     fun saveSettings(settings: AppSettings) {
         viewModelScope.launch { settingsRepository.saveSettings(settings) }
     }
@@ -74,12 +89,17 @@ class SettingsViewModel @Inject constructor(
         _reminder.value = _reminder.value.copy(frequency = frequency, savedOk = false)
     }
 
+    fun selectAndSaveReminderChannel(channel: String) {
+        setReminderChannel(channel)
+        saveReminder()
+    }
+
     fun saveReminder() {
         val r = _reminder.value
         viewModelScope.launch {
             _reminder.value = r.copy(isSaving = true, savedOk = false)
             runCatching {
-                authApi.updateReminder(UpdateReminderRequest(r.channel, r.frequency))
+                authRepository.updateReminderPrefs(r.channel, r.frequency)
                 authPrefs.reminderChannel = r.channel
                 authPrefs.reminderFrequency = r.frequency
             }
@@ -87,7 +107,10 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun logout() {
-        authPrefs.clear()
+    /** Uploads pending changes first; [onFailed] is called (and nothing is wiped) if that isn't possible. */
+    fun logout(onLoggedOut: () -> Unit, onFailed: () -> Unit) {
+        viewModelScope.launch {
+            if (cloudSync.signOut()) onLoggedOut() else onFailed()
+        }
     }
 }
