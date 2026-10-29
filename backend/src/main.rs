@@ -33,8 +33,7 @@ async fn main() -> anyhow::Result<()> {
     let db = db::connect(&config.mongodb_uri, &config.mongodb_db_name).await?;
     db::ensure_indexes(&db).await?;
 
-    tracing::info!("connecting to Redis...");
-    let cache = cache::Cache::connect(&config.redis_url, config.cache_ttl_seconds).await?;
+    let cache = cache::Cache::connect(config.redis_url.as_deref(), config.cache_ttl_seconds).await;
 
     let encryptor = Encryptor::new(&config.encryption_key);
 

@@ -7,34 +7,57 @@ use serde::de::DeserializeOwned;
 /// user-scoped JSON payload (profile / reports / full backup) with a short
 /// TTL — Mongo stays the source of truth, Redis just saves a decrypt round
 /// trip for repeat reads within the TTL window.
+///
+/// Redis is optional: without `REDIS_URL` (or if it can't be reached at
+/// startup) every read goes straight to MongoDB and writes are skipped.
 #[derive(Clone)]
 pub struct Cache {
-    conn: ConnectionManager,
+    conn: Option<ConnectionManager>,
     ttl_seconds: u64,
 }
 
 impl Cache {
-    pub async fn connect(url: &str, ttl_seconds: u64) -> redis::RedisResult<Self> {
-        let client = redis::Client::open(url)?;
-        let conn = client.get_connection_manager().await?;
-        Ok(Self { conn, ttl_seconds })
+    pub async fn connect(url: Option<&str>, ttl_seconds: u64) -> Self {
+        let Some(url) = url else {
+            tracing::warn!("REDIS_URL not set — running without cache (MongoDB only)");
+            return Self { conn: None, ttl_seconds };
+        };
+        let conn = match redis::Client::open(url) {
+            Ok(client) => client.get_connection_manager().await,
+            Err(e) => Err(e),
+        };
+        match conn {
+            Ok(conn) => Self { conn: Some(conn), ttl_seconds },
+            Err(e) => {
+                tracing::warn!(error = %e, "could not connect to Redis — running without cache (MongoDB only)");
+                Self { conn: None, ttl_seconds }
+            }
+        }
+    }
+
+    pub fn is_enabled(&self) -> bool {
+        self.conn.is_some()
     }
 
     pub async fn get_json<T: DeserializeOwned>(&self, key: &str) -> Option<T> {
-        let mut conn = self.conn.clone();
+        let mut conn = self.conn.clone()?;
         let raw: Option<String> = conn.get(key).await.ok()?;
         raw.and_then(|s| serde_json::from_str(&s).ok())
     }
 
     pub async fn set_json<T: Serialize>(&self, key: &str, value: &T) {
+        let Some(mut conn) = self.conn.clone() else {
+            return;
+        };
         if let Ok(s) = serde_json::to_string(value) {
-            let mut conn = self.conn.clone();
             let _: Result<(), _> = conn.set_ex(key, s, self.ttl_seconds).await;
         }
     }
 
     pub async fn ping(&self) -> redis::RedisResult<()> {
-        let mut conn = self.conn.clone();
+        let Some(mut conn) = self.conn.clone() else {
+            return Ok(());
+        };
         redis::cmd("PING").query_async::<String>(&mut conn).await?;
         Ok(())
     }

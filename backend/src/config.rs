@@ -4,7 +4,8 @@ use std::env;
 pub struct Config {
     pub mongodb_uri: String,
     pub mongodb_db_name: String,
-    pub redis_url: String,
+    /// Optional — without it the backend runs on MongoDB alone.
+    pub redis_url: Option<String>,
     pub jwt_secret: String,
     pub jwt_ttl_seconds: i64,
     pub encryption_key: [u8; 32],
@@ -37,7 +38,9 @@ impl Config {
                 .unwrap_or_else(|_| "mongodb://localhost:27017".to_string()),
             mongodb_db_name: env::var("MONGODB_DB_NAME").unwrap_or_else(|_| "cocobiz".to_string()),
             redis_url: env::var("REDIS_URL")
-                .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string()),
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty()),
             jwt_secret,
             jwt_ttl_seconds: env::var("JWT_TTL_SECONDS")
                 .ok()

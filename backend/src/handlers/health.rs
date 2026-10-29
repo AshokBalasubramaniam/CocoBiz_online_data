@@ -26,6 +26,7 @@ pub async fn health(State(state): State<AppState>) -> (StatusCode, Json<serde_js
             "status": if status == StatusCode::OK { "ok" } else { "degraded" },
             "mongodb": mongo_ok,
             "redis": redis_ok,
+            "cache_enabled": state.cache.is_enabled(),
         })),
     )
 }
