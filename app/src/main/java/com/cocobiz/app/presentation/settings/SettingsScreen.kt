@@ -65,7 +65,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.cocobiz.app.R
 import com.cocobiz.app.domain.model.DarkModeOption
-import com.cocobiz.app.ui.components.ConfirmationDialog
+import com.cocobiz.app.ui.components.LogoutConfirmSheet
 import com.cocobiz.app.ui.theme.SettingsColors
 
 @Composable
@@ -79,6 +79,7 @@ fun SettingsScreen(
     val reminder by viewModel.reminder.collectAsStateWithLifecycle()
     val profile by viewModel.profile.collectAsStateWithLifecycle()
     var showLogoutDialog by remember { mutableStateOf(false) }
+    var isLoggingOut by remember { mutableStateOf(false) }
     val context = LocalContext.current
     // Hidden "Advanced" section: unlocked by tapping the version label 7 times
     var versionTaps by remember { mutableIntStateOf(0) }
@@ -86,14 +87,18 @@ fun SettingsScreen(
     val showAdvanced = advancedUnlocked || settings.editCompletedEnabled
 
     if (showLogoutDialog) {
-        ConfirmationDialog(
-            title = "Logout",
-            message = "Are you sure you want to logout?",
+        LogoutConfirmSheet(
+            isLoggingOut = isLoggingOut,
             onConfirm = {
-                showLogoutDialog = false
+                isLoggingOut = true
                 viewModel.logout(
-                    onLoggedOut = onLogout,
+                    onLoggedOut = {
+                        isLoggingOut = false
+                        showLogoutDialog = false
+                        onLogout()
+                    },
                     onFailed = {
+                        isLoggingOut = false
                         Toast.makeText(
                             context,
                             "Some changes are not uploaded yet. Connect to the internet and try again.",
@@ -102,9 +107,7 @@ fun SettingsScreen(
                     }
                 )
             },
-            onDismiss = { showLogoutDialog = false },
-            confirmText = "Logout",
-            confirmButtonColor = MaterialTheme.colorScheme.error
+            onDismiss = { showLogoutDialog = false }
         )
     }
 
