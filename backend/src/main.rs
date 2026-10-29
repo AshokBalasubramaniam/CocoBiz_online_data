@@ -6,9 +6,11 @@ mod error;
 mod extractors;
 mod handlers;
 mod jwt;
+mod migrate;
 mod models;
 mod routes;
 mod state;
+mod store;
 
 use std::sync::Arc;
 

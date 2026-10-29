@@ -1,9 +1,14 @@
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::header::AUTHORIZATION;
+use mongodb::bson::doc;
+use mongodb::bson::oid::ObjectId;
 
+use crate::db;
 use crate::error::AppError;
 use crate::jwt;
+use crate::migrate;
+use crate::models::CURRENT_DATA_VERSION;
 use crate::state::AppState;
 
 /// The authenticated caller, resolved from a `Authorization: Bearer <jwt>`
@@ -12,7 +17,8 @@ use crate::state::AppState;
 /// to whoever holds the token — there is no way to pass someone else's
 /// username in and access their records.
 pub struct AuthUser {
-    pub username_lower: String,
+    /// `users._id` — the owner key stored on every business-data row.
+    pub user_id: ObjectId,
 }
 
 impl FromRequestParts<AppState> for AuthUser {
@@ -34,8 +40,18 @@ impl FromRequestParts<AppState> for AuthUser {
 
         let claims = jwt::verify_token(token, &state.config.jwt_secret)?;
 
-        Ok(AuthUser {
-            username_lower: claims.sub,
-        })
+        let user = db::users_collection(&state.db)
+            .find_one(doc! { "username_lower": &claims.sub })
+            .await?
+            .ok_or_else(|| AppError::Auth("account no longer exists".to_string()))?;
+        let user_id = user
+            .id
+            .ok_or_else(|| AppError::Internal("user document has no _id".to_string()))?;
+
+        if user.data_version < CURRENT_DATA_VERSION {
+            migrate::migrate_legacy_user(state, &claims.sub, user_id).await?;
+        }
+
+        Ok(AuthUser { user_id })
     }
 }

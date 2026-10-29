@@ -1,39 +1,22 @@
 use axum::Json;
 use axum::extract::State;
 use chrono::Utc;
-use mongodb::bson::doc;
 
-use crate::db;
+use crate::cache;
 use crate::error::AppError;
 use crate::extractors::AuthUser;
-use crate::models::UserProfileDto;
+use crate::models::{AppSettingsDto, UserProfileDto};
 use crate::state::AppState;
-
-fn cache_key(username_lower: &str) -> String {
-    format!("cocobiz:profile:{username_lower}")
-}
+use crate::store;
 
 pub async fn get_profile(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<UserProfileDto>, AppError> {
-    let key = cache_key(&auth.username_lower);
-    if let Some(cached) = state.cache.get_json::<UserProfileDto>(&key).await {
-        return Ok(Json(cached));
-    }
-
-    let doc = db::user_data_collection(&state.db)
-        .find_one(doc! { "username_lower": &auth.username_lower })
+    store::get_profile(&state.db, auth.user_id)
         .await?
-        .ok_or_else(|| AppError::NotFound("no profile found for this account".to_string()))?;
-
-    let profile = match doc.enc_user_details {
-        Some(blob) => state.encryptor.decrypt_json::<UserProfileDto>(&blob)?,
-        None => UserProfileDto::default(),
-    };
-
-    state.cache.set_json(&key, &profile).await;
-    Ok(Json(profile))
+        .map(Json)
+        .ok_or_else(|| AppError::NotFound("no profile found for this account".to_string()))
 }
 
 pub async fn put_profile(
@@ -41,20 +24,28 @@ pub async fn put_profile(
     auth: AuthUser,
     Json(mut body): Json<UserProfileDto>,
 ) -> Result<Json<UserProfileDto>, AppError> {
-    let now = Utc::now();
-    body.updated_at = now.timestamp_millis();
+    body.updated_at = Utc::now().timestamp_millis();
+    store::put_profile(&state.db, auth.user_id, body.clone()).await?;
+    cache::invalidate_user(&state.cache, &auth.user_id).await;
+    Ok(Json(body))
+}
 
-    let blob = state.encryptor.encrypt_json(&body)?;
-    let blob_bson = mongodb::bson::to_bson(&blob)?;
+pub async fn get_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<AppSettingsDto>, AppError> {
+    store::get_settings(&state.db, auth.user_id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| AppError::NotFound("no settings saved for this account".to_string()))
+}
 
-    db::user_data_collection(&state.db)
-        .update_one(
-            doc! { "username_lower": &auth.username_lower },
-            doc! { "$set": { "enc_user_details": blob_bson, "updated_at": now } },
-        )
-        .upsert(true)
-        .await?;
-
-    state.cache.set_json(&cache_key(&auth.username_lower), &body).await;
+pub async fn put_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<AppSettingsDto>,
+) -> Result<Json<AppSettingsDto>, AppError> {
+    store::put_settings(&state.db, auth.user_id, body.clone()).await?;
+    cache::invalidate_user(&state.cache, &auth.user_id).await;
     Ok(Json(body))
 }

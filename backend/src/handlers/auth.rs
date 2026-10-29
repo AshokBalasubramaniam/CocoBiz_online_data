@@ -8,10 +8,11 @@ use crate::db;
 use crate::error::AppError;
 use crate::jwt;
 use crate::models::{
-    AuthResponse, LoginRequest, RegisterRequest, ResetPasswordRequest, UserDataDoc, UserDoc,
-    UserProfileDto,
+    AuthResponse, CURRENT_DATA_VERSION, LoginRequest, RegisterRequest, ResetPasswordRequest,
+    UserDoc, UserProfileDto,
 };
 use crate::state::AppState;
+use crate::store;
 
 pub async fn register(
     State(state): State<AppState>,
@@ -48,8 +49,14 @@ pub async fn register(
         email: req.email.clone(),
         phone: req.phone.clone(),
         created_at: now,
+        data_version: CURRENT_DATA_VERSION,
     };
-    users.insert_one(user_doc).await?;
+    let user_id = users
+        .insert_one(user_doc)
+        .await?
+        .inserted_id
+        .as_object_id()
+        .ok_or_else(|| AppError::Internal("insert did not return an ObjectId".to_string()))?;
 
     let profile = UserProfileDto {
         business_name: req.business_name,
@@ -60,19 +67,7 @@ pub async fn register(
         updated_at: now.timestamp_millis(),
         ..Default::default()
     };
-    let enc_user_details = state.encryptor.encrypt_json(&profile)?;
-
-    let user_data_doc = UserDataDoc {
-        id: None,
-        username_lower: username_lower.clone(),
-        enc_user_details: Some(enc_user_details),
-        enc_full_details: None,
-        enc_reports: None,
-        updated_at: now,
-    };
-    db::user_data_collection(&state.db)
-        .insert_one(user_data_doc)
-        .await?;
+    store::put_profile(&state.db, user_id, profile).await?;
 
     let token = jwt::create_token(&username_lower, &state.config.jwt_secret, state.config.jwt_ttl_seconds)?;
     Ok(Json(AuthResponse {

@@ -54,6 +54,13 @@ impl Cache {
         }
     }
 
+    pub async fn delete(&self, keys: &[String]) {
+        let Some(mut conn) = self.conn.clone() else {
+            return;
+        };
+        let _: Result<(), _> = conn.del(keys).await;
+    }
+
     pub async fn ping(&self) -> redis::RedisResult<()> {
         let Some(mut conn) = self.conn.clone() else {
             return Ok(());
@@ -61,4 +68,17 @@ impl Cache {
         redis::cmd("PING").query_async::<String>(&mut conn).await?;
         Ok(())
     }
+}
+
+pub fn bundle_key(user_id: &mongodb::bson::oid::ObjectId) -> String {
+    format!("cocobiz:full:{}", user_id.to_hex())
+}
+
+pub fn reports_key(user_id: &mongodb::bson::oid::ObjectId) -> String {
+    format!("cocobiz:reports:{}", user_id.to_hex())
+}
+
+/// Drops every cached view of this user's data; call after any write.
+pub async fn invalidate_user(cache: &Cache, user_id: &mongodb::bson::oid::ObjectId) {
+    cache.delete(&[bundle_key(user_id), reports_key(user_id)]).await;
 }

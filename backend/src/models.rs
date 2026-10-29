@@ -20,8 +20,33 @@ pub struct UserDoc {
     pub phone: String,
     #[serde(with = "mongodb::bson::serde_helpers::chrono_datetime_as_bson_datetime")]
     pub created_at: DateTime<Utc>,
+    /// 1 = data still in the legacy encrypted `user_data` blob,
+    /// 2 = data lives in the per-user `profiles`/`settings`/`dealers`/`sales` collections.
+    #[serde(default = "legacy_data_version")]
+    pub data_version: i32,
 }
 
+fn legacy_data_version() -> i32 {
+    1
+}
+
+pub const CURRENT_DATA_VERSION: i32 = 2;
+
+/// A business record owned by one user. Every collection (`profiles`,
+/// `settings`, `dealers`, `sales`) stores rows of this shape, so each row
+/// carries its owner and every query is filtered by `user_id`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Owned<T> {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<ObjectId>,
+    pub user_id: ObjectId,
+    #[serde(flatten)]
+    pub data: T,
+}
+
+/// Legacy (data_version 1) storage: one encrypted blob per account. Only read
+/// once to migrate an account into the per-collection layout.
+///
 /// One document per account, keyed by `username_lower`. Every field that can
 /// hold business data is an [`EncryptedBlob`] (AES-256-GCM) — MongoDB never
 /// sees plaintext dealer names, sales figures, or contact details.
@@ -80,12 +105,12 @@ pub struct AuthResponse {
     pub username: String,
 }
 
-// ---------- Business data DTOs (plaintext shape; encrypted once at rest) ----------
+// ---------- Business data DTOs ----------
 // These mirror the Android app's Room entities (UserProfileEntity, DealerEntity,
 // SalesEntryEntity) so the mobile app's existing JSON backup format maps 1:1
 // onto this API.
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserProfileDto {
     #[serde(default)]
     pub business_name: String,
@@ -113,7 +138,7 @@ pub struct UserProfileDto {
     pub updated_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DealerDto {
     pub id: i64,
     pub dealer_name: String,
@@ -143,7 +168,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SalesEntryDto {
     pub id: i64,
     pub dealer_id: i64,
@@ -177,7 +202,7 @@ fn default_status() -> String {
 
 /// Mirrors the app's SettingsEntity plus the account's reminder preferences,
 /// so an account's preferences follow it to a new device.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppSettingsDto {
     #[serde(default = "default_reminder_days")]
     pub reminder_days: i32,
